@@ -39,6 +39,7 @@
 >     (29): ReLU(inplace=True)
 >     (30): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
 >   )
+>   
 >   (classifier): Sequential(
 >     (0): Linear(in_features=512, out_features=512, bias=False)
 >     (1): ReLU(inplace=True)
