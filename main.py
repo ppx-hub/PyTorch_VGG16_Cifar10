@@ -1,21 +1,13 @@
 import os
-import torch
-from torchvision import datasets
-import torchvision.transforms as transforms
-import time
-import torch.nn as nn
 import argparse
-import numpy as np
-from torch.utils.data import DataLoader
-import torch.backends.cudnn as cudnn
-
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
-
 parser = argparse.ArgumentParser(
     description='VGG16 for classification in cifar10 Training With Pytorch')
+parser.add_argument('--seed', default=42, type=int,
+                    help='random seed for training')
 parser.add_argument('--batch_size', default=64, type=int,
                     help='Batch size for training')
 parser.add_argument('--cuda', default=True, type=str2bool,
@@ -31,6 +23,38 @@ parser.add_argument('-no_wp', '--no_warm_up', action='store_true', default=False
 parser.add_argument('--wp_epoch', type=int, default=5,
                     help='The upper bound of warm-up')
 args = parser.parse_args()
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+
+import logging
+def get_logger(filename, verbosity=1, name=None):
+    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
+    formatter = logging.Formatter(
+        "[%(asctime)s][%(filename)s][line:%(lineno)d][%(levelname)s] %(message)s"
+    )
+    logger = logging.getLogger(name)
+    logger.setLevel(level_dict[verbosity])
+
+    fh = logging.FileHandler(filename, "w")
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+
+    return logger
+
+import torch
+from torchvision import datasets
+import torchvision.transforms as transforms
+import time
+import torch.nn as nn
+import numpy as np
+from torch.utils.data import DataLoader
+import torch.backends.cudnn as cudnn
+import random
+
 
 cfg = {'VGG16': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M'],
        'lr_epoch': (75, 120)}
@@ -127,7 +151,23 @@ def set_lr(optimizer, lr):
         param_group['lr'] = lr
 
 
+def setup_seed(seed):
+    """
+    固定随机种子，保证复现性
+    """
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
 if __name__ == '__main__':
+    # 固定种子
+    setup_seed(args.seed)
+
     # 数据增强:随机翻转
     train_dataset, test_dataset = transforms_RandomHorizontalFlip()
 
@@ -148,9 +188,7 @@ if __name__ == '__main__':
 
     net = VGG(vgg(cfg['VGG16'], 3, False))  # 这里的net就是VGG16
 
-    if args.cuda:  # 多卡并行
-        os.environ["CUDA_VISIBLE_DEVICES"] = "7"
-        net = torch.nn.DataParallel(net)
+    if args.cuda:
         cudnn.benchmark = True
         net.cuda()
 
@@ -163,6 +201,10 @@ if __name__ == '__main__':
     net.train()
     acc = []
     start = time.time()
+
+    # 新建训练日志
+    logger = get_logger('exp.log')
+
     for epoch in range(150):
         train_loss = 0.0
 
@@ -191,22 +233,22 @@ if __name__ == '__main__':
             optimizer.step()
             train_loss += loss.item()
             if iter_i % 100 == 99:
-                print('[epoch: %d iteration: %5d] loss: %.3f' % (epoch + 1, iter_i + 1, train_loss / 100))
+                logger.info('[epoch: %d iteration: %5d] loss: %.3f' % (epoch + 1, iter_i + 1, train_loss / 100))
                 train_loss = 0.0
         lr_1 = optimizer.param_groups[0]['lr']
-        print("learn_rate:%.15f" % lr_1)
+        logger.info("learn_rate:%.15f" % lr_1)
         if epoch % 5 == 4:
-            print('Saving epoch %d model ...' % (epoch + 1))
+            logger.info('Saving epoch %d model ...' % (epoch + 1))
             if not os.path.isdir('checkpoint'):
                 os.mkdir('checkpoint')
-            torch.save(net.state_dict(), './checkpoint4/cifar10_epoch_%d.pth' % (epoch + 1))
+            torch.save(net.state_dict(), './checkpoint/cifar10_epoch_%d.pth' % (epoch + 1))
 
             # 由于训练集不需要梯度更新,于是进入测试模式
             net.eval()
             correct = 0.0
             total = 0
             with torch.no_grad():  # 训练集不需要反向传播
-                print("=======================test=======================")
+                logger.info("=======================test=======================")
                 for inputs, labels in test_loader:
                     inputs, labels = inputs.cuda(), labels.cuda()
                     outputs = net(inputs)
@@ -215,11 +257,11 @@ if __name__ == '__main__':
                     total += inputs.size(0)
                     correct += torch.eq(pred, labels).sum().item()
 
-            print("Accuracy of the network on the 10000 test images:%.2f %%" % (100 * correct / total))
-            print("===============================================")
+            logger.info("Accuracy of the network on the 10000 test images:%.2f %%" % (100 * correct / total))
+            logger.info("===============================================")
 
             acc.append(100 * correct / total)
-    print("best acc is %.2f, corresponding epoch is %d" % (max(acc), (np.argmax(acc) + 1) * 5))
-    print("===============================================")
+    logger.info("best acc is %.2f, corresponding epoch is %d" % (max(acc), (np.argmax(acc) + 1) * 5))
+    logger.info("===============================================")
     end = time.time()
-    print("time:{}".format(end - start))
+    logger.info("time:{}".format(end - start))
